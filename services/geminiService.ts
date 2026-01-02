@@ -110,7 +110,10 @@ export const analyzePage = async (
     1. Extract regular text (paragraphs, headings) normally.
     2. If you see a Table, Formula, or Diagram/Photo, return a block with the specific type and its \`boundingBox\` [ymin, xmin, ymax, xmax] (scale 0-1000).
     3. For 'image_crop' blocks, provide a short description in the \`text\` field.
-    4. If a target language is specified (${targetLanguage}), TRANSLATE the *text* blocks immediately. 
+    4. TRANSLATION RULES (CRITICAL):
+       - If the target language is '${targetLanguage}' (and NOT 'Original'), you MUST translate EVERY text block.
+       - **TRANSLATE THE FIRST PAGE.** Do not skip titles, journal names, or author names.
+       - Even if the page looks like a cover page, TRANSLATE IT.
     5. Detect the Page Number if visible.
     
     Return strict JSON.
@@ -130,7 +133,7 @@ export const analyzePage = async (
               type: Type.STRING, 
               enum: ["heading", "subheading", "author", "paragraph", "image_description", "table_crop", "formula_crop", "image_crop"] 
             },
-            text: { type: Type.STRING, description: "Content or description" },
+            text: { type: Type.STRING, description: "Content or description (Translated if required)" },
             boundingBox: {
                  type: Type.ARRAY,
                  items: { type: Type.INTEGER },
@@ -151,7 +154,7 @@ export const analyzePage = async (
         role: 'user',
         parts: [
           filePart,
-          { text: `Analyze this page. Target Language: ${targetLanguage}.` }
+          { text: `Analyze this page. Target Language: ${targetLanguage}. Remember to TRANSLATE everything if language is not Original.` }
         ]
       },
       config: {
@@ -232,23 +235,19 @@ export const reorderPagesByContent = async (pages: DocxGenerationData[]): Promis
 
         if (response.text) {
             const newOrderIds = JSON.parse(response.text) as number[];
-            // Reconstruct array based on new order
             const reorderedPages: DocxGenerationData[] = [];
             newOrderIds.forEach(id => {
                 if (pages[id]) reorderedPages.push(pages[id]);
             });
-            
             // Add any missing pages (safety fallback)
             pages.forEach((p, idx) => {
                 if (!newOrderIds.includes(idx)) reorderedPages.push(p);
             });
-            
             return reorderedPages;
         }
         return pages; // Fallback
     } catch (e) {
         console.error("Reordering failed, using default sort", e);
-        // Fallback to simple page number sort
         return [...pages].sort((a, b) => (a.analysis.pageNumber || 999) - (b.analysis.pageNumber || 999));
     }
 };
@@ -257,26 +256,34 @@ export const reorderPagesByContent = async (pages: DocxGenerationData[]): Promis
 
 export const generateSummary = async (fullText: string, language: string): Promise<string> => {
   const ai = getAiClient();
-  const modelId = "gemini-2.0-flash"; // More intelligent for summarizing
+  const modelId = "gemini-2.0-flash"; 
 
   try {
-    const sanitizedInput = sanitizeText(fullText.substring(0, 50000));
+    const sanitizedInput = sanitizeText(fullText.substring(0, 60000)); // Increased context window
     
     const prompt = `
-      Ты профессиональный редактор. Проанализируй этот текст (он собран из нескольких страниц OCR).
+      Ты — опытный аналитик и редактор. Твоя задача — составить подробное, глубокое аналитическое резюме (Executive Summary) на основе предоставленного текста статьи.
       
-      Твоя задача: Написать структурированное Саммари (Резюме) статьи.
+      СТРОГИЕ ТРЕБОВАНИЯ К РЕЗЮМЕ:
+      1. **Язык**: СТРОГО РУССКИЙ (вне зависимости от языка оригинала).
+      2. **Формат**: Обычный текст (plain text). ЗАПРЕЩЕНО использовать Markdown символы (звездочки **, решетки ##).
+      3. **Структура**: Резюме должно быть разбито на 4-5 отдельных, объемных абзацев, каждый из которых раскрывает конкретную тему. Разделяй абзацы двойным переносом строки.
       
-      Требования:
-      1. Язык: СТРОГО РУССКИЙ.
-      2. Очистка: Игнорируй мусор OCR, номера страниц, колонтитулы.
-      3. Структура:
-         - Основная тема
-         - Ключевые проблемы/методы
-         - Результаты/Выводы
-      4. Формат: Используй разделение на абзацы для каждой идеи. НЕ используй Markdown (жирный, курсив, заголовки через #). Просто чистый текст с отступами.
+      СМЫСЛОВЫЕ БЛОКИ ДЛЯ АБЗАЦЕВ:
       
-      Текст:
+      Блок 1: Контекст и Цели.
+      О чем эта статья? Какую проблему решают авторы? Какова актуальность исследования?
+      
+      Блок 2: Методология и Подход.
+      Какие методы использовались? Были ли эксперименты, математическое моделирование или теоретический анализ?
+      
+      Блок 3: Ключевые Результаты.
+      Что конкретно было обнаружено или доказано? Приведи основные факты и аргументы из текста.
+      
+      Блок 4: Выводы и Заключение.
+      К чему пришли авторы? Каково практическое значение работы?
+      
+      Текст для анализа:
       ${sanitizedInput}...
     `;
 
